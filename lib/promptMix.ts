@@ -65,6 +65,19 @@ export function mixFromPrompt(input: string): Mix {
     add("train", 66);
   }
 
+  // Scenari speciali dedicati
+  if (/nonna|stanza della nonna|camera vintage|vecchia stanza/.test(text)) {
+    add("clock", 65);
+    add("catPurr", 48);
+    add("fire", 35);
+    add("rain", 15);
+  }
+  if (/sonno profondo|dormire profondamente|insonnia|delta/.test(text)) {
+    add("brownNoise", 75);
+    add("waves", 35);
+    add("rain", 25);
+  }
+
   // Notte & suoni continui
   if (/notte|stelle|notturn|grilli|cicale/.test(text)) {
     add("night", 40);

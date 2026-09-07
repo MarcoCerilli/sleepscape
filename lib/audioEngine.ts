@@ -672,49 +672,98 @@ export class AudioEngine {
     osc.stop(time + 0.044);
   }
 
-  // --- 9. PHON / ASCIUGACAPELLI (Hairdryer: warm motor hum + airflow turbulence) ---
+  // --- 9. PHON / ASCIUGACAPELLI (Hairdryer: broad aerodynamic airflow + heated nozzle resonance + dual-harmonic motor) ---
   private hairdryerChannel(gain: GainNode): Channel {
     const ctx = this.ensureContext();
-    const length = ctx.sampleRate * 3;
+    const length = ctx.sampleRate * 4;
     const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
     const data = buffer.getChannelData(0);
+
+    // Warm aerodynamic air turbulence (filtered pink/white noise)
     let b0 = 0, b1 = 0, b2 = 0;
     for (let i = 0; i < length; i++) {
       const white = Math.random() * 2 - 1;
-      b0 = 0.99886 * b0 + white * 0.0555179;
-      b1 = 0.99332 * b1 + white * 0.0750759;
-      b2 = 0.96900 * b2 + white * 0.1538520;
-      data[i] = (b0 + b1 + b2 + white * 0.5362) * 0.32;
+      b0 = 0.998 * b0 + white * 0.055;
+      b1 = 0.992 * b1 + white * 0.075;
+      b2 = 0.965 * b2 + white * 0.15;
+      data[i] = (b0 + b1 + b2 + white * 0.45) * 0.28;
     }
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    source.loop = true;
+    const airSource = ctx.createBufferSource();
+    airSource.buffer = buffer;
+    airSource.loop = true;
 
-    const bandpass = ctx.createBiquadFilter();
-    bandpass.type = "bandpass";
-    bandpass.frequency.value = 480;
-    bandpass.Q.value = 1.0;
+    // 1. Broad air flow
+    const airLowpass = ctx.createBiquadFilter();
+    airLowpass.type = "lowpass";
+    airLowpass.frequency.value = 2800;
 
-    const lowpass = ctx.createBiquadFilter();
-    lowpass.type = "lowpass";
-    lowpass.frequency.value = 1900;
+    const airHighpass = ctx.createBiquadFilter();
+    airHighpass.type = "highpass";
+    airHighpass.frequency.value = 180;
 
-    source.connect(bandpass).connect(lowpass).connect(gain);
+    const airGain = ctx.createGain();
+    airGain.gain.value = 0.52;
+    airSource.connect(airHighpass).connect(airLowpass).connect(airGain).connect(gain);
 
-    const motor = ctx.createOscillator();
-    motor.type = "triangle";
-    motor.frequency.value = 174;
+    // 2. Heated barrel nozzle resonance (gives that characteristic hollow jet whoosh)
+    const nozzleFilter = ctx.createBiquadFilter();
+    nozzleFilter.type = "bandpass";
+    nozzleFilter.frequency.value = 750;
+    nozzleFilter.Q.value = 1.4;
 
-    const motorGain = ctx.createGain();
-    motorGain.gain.value = 0.07;
-    motor.connect(motorGain).connect(gain);
+    const nozzleGain = ctx.createGain();
+    nozzleGain.gain.value = 0.38;
+    airSource.connect(nozzleFilter).connect(nozzleGain).connect(gain);
 
-    source.start();
-    motor.start();
+    // 3. Realistic motor rotation whine (electric universal motor ~12,000 RPM)
+    const motorOsc1 = ctx.createOscillator();
+    motorOsc1.type = "triangle";
+    motorOsc1.frequency.value = 196;
+
+    const motorOsc2 = ctx.createOscillator();
+    motorOsc2.type = "sine";
+    motorOsc2.frequency.value = 392;
+
+    const motorLfo = ctx.createOscillator();
+    motorLfo.type = "sine";
+    motorLfo.frequency.value = 0.35;
+    const motorLfoGain = ctx.createGain();
+    motorLfoGain.gain.value = 1.2;
+    motorLfo.connect(motorLfoGain).connect(motorOsc1.frequency);
+    motorLfo.connect(motorLfoGain).connect(motorOsc2.frequency);
+
+    const mGain1 = ctx.createGain();
+    mGain1.gain.value = 0.055;
+    const mGain2 = ctx.createGain();
+    mGain2.gain.value = 0.025;
+
+    motorOsc1.connect(mGain1).connect(gain);
+    motorOsc2.connect(mGain2).connect(gain);
+
+    // 4. Suction intake hum (rear grill)
+    const suctionOsc = ctx.createOscillator();
+    suctionOsc.type = "sine";
+    suctionOsc.frequency.value = 98;
+    const suctionGain = ctx.createGain();
+    suctionGain.gain.value = 0.045;
+    suctionOsc.connect(suctionGain).connect(gain);
+
+    airSource.start();
+    motorOsc1.start();
+    motorOsc2.start();
+    motorLfo.start();
+    suctionOsc.start();
+
     return {
       gain,
       stop: () => {
-        try { source.stop(); motor.stop(); } catch {}
+        try {
+          airSource.stop();
+          motorOsc1.stop();
+          motorOsc2.stop();
+          motorLfo.stop();
+          suctionOsc.stop();
+        } catch {}
       },
     };
   }
@@ -765,17 +814,18 @@ export class AudioEngine {
     };
   }
 
-  // --- 11. TUONI LONTANI (Distant thunder: immediate storm atmosphere + multi-stage rolling thunder) ---
+  // --- 11. TUONI LONTANI (Distant thunder: horizon storm atmosphere + lightning cloud crackle + rolling shockwave & multi-stage echoes) ---
   private thunderChannel(gain: GainNode): Channel {
     const ctx = this.ensureContext();
+    // 1. Continuous distant horizon storm atmosphere
     const length = ctx.sampleRate * 4;
     const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
     const data = buffer.getChannelData(0);
     let last = 0;
     for (let i = 0; i < length; i++) {
       const white = Math.random() * 2 - 1;
-      last = (last + 0.03 * white) / 1.03;
-      data[i] = last * 3.5;
+      last = (last + 0.025 * white) / 1.025;
+      data[i] = last * 3.8;
     }
     const ambientSource = ctx.createBufferSource();
     ambientSource.buffer = buffer;
@@ -783,10 +833,10 @@ export class AudioEngine {
 
     const ambientFilter = ctx.createBiquadFilter();
     ambientFilter.type = "lowpass";
-    ambientFilter.frequency.value = 180;
+    ambientFilter.frequency.value = 160;
 
     const ambientGain = ctx.createGain();
-    ambientGain.gain.value = 0.38;
+    ambientGain.gain.value = 0.42;
     ambientSource.connect(ambientFilter).connect(ambientGain).connect(gain);
     ambientSource.start();
 
@@ -796,11 +846,13 @@ export class AudioEngine {
     const scheduleThunderStrike = () => {
       if (isStopped || ctx.state === "closed") return;
       const t = ctx.currentTime;
-      this.triggerThunderBoom(gain, t);
-      strikeTimeout = window.setTimeout(scheduleThunderStrike, 7500 + Math.random() * 6500);
+      this.triggerEpicThunder(gain, t);
+      // Periodic rolling strikes every 6 to 11 seconds
+      strikeTimeout = window.setTimeout(scheduleThunderStrike, 6500 + Math.random() * 4500);
     };
 
-    strikeTimeout = window.setTimeout(scheduleThunderStrike, 350);
+    // Immediate first strike (within 200ms) for instant feedback!
+    strikeTimeout = window.setTimeout(scheduleThunderStrike, 200);
 
     return {
       gain,
@@ -812,12 +864,51 @@ export class AudioEngine {
     };
   }
 
-  private triggerThunderBoom(destination: GainNode, startTime: number) {
+  private triggerEpicThunder(destination: GainNode, startTime: number) {
     const ctx = this.ensureContext();
     if (ctx.state === "closed") return;
-    this.playThunderRumble(ctx, destination, startTime, 3.8, 0.7, 240);
-    this.playThunderRumble(ctx, destination, startTime + 0.6, 4.2, 0.55, 190);
-    this.playThunderRumble(ctx, destination, startTime + 1.5, 4.0, 0.42, 140);
+
+    // 1. Distant lightning tearing / cloud ionization crackle (0.0s to 0.22s)
+    this.playThunderCrackle(ctx, destination, startTime);
+
+    // 2. Main shockwave boom (arrival at t + 0.22s, deep and heavy)
+    this.playThunderRumble(ctx, destination, startTime + 0.22, 4.5, 0.85, 260);
+
+    // 3. Rolling rebound wave 1 (t + 1.2s, secondary echo)
+    this.playThunderRumble(ctx, destination, startTime + 1.2, 4.2, 0.62, 200);
+
+    // 4. Rolling rebound wave 2 (t + 2.5s, distant echoing boom)
+    this.playThunderRumble(ctx, destination, startTime + 2.5, 3.8, 0.48, 160);
+
+    // 5. Receding rumble (t + 4.1s, fades into horizon)
+    this.playThunderRumble(ctx, destination, startTime + 4.1, 3.5, 0.32, 120);
+  }
+
+  private playThunderCrackle(ctx: AudioContext, dest: GainNode, time: number) {
+    if (ctx.state === "closed") return;
+    const dur = 0.22;
+    const len = Math.floor(ctx.sampleRate * dur);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) {
+      d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (len * 0.4));
+    }
+    const s = ctx.createBufferSource();
+    s.buffer = buf;
+
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = 1200;
+    bp.Q.value = 1.8;
+
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, time);
+    g.gain.linearRampToValueAtTime(0.28, time + 0.04);
+    g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+
+    s.connect(bp).connect(g).connect(dest);
+    s.start(time);
+    s.stop(time + dur + 0.02);
   }
 
   private playThunderRumble(ctx: AudioContext, dest: GainNode, time: number, dur: number, vol: number, filterCutoff: number) {
@@ -828,8 +919,8 @@ export class AudioEngine {
     let last = 0;
     for (let i = 0; i < len; i++) {
       const white = Math.random() * 2 - 1;
-      last = (last + 0.035 * white) / 1.035;
-      d[i] = last * 3.8;
+      last = (last + 0.032 * white) / 1.032;
+      d[i] = last * 4.0;
     }
     const s = ctx.createBufferSource();
     s.buffer = buf;
@@ -837,11 +928,11 @@ export class AudioEngine {
     const filter = ctx.createBiquadFilter();
     filter.type = "lowpass";
     filter.frequency.setValueAtTime(filterCutoff, time);
-    filter.frequency.exponentialRampToValueAtTime(70, time + dur);
+    filter.frequency.exponentialRampToValueAtTime(55, time + dur);
 
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, time);
-    g.gain.linearRampToValueAtTime(vol, time + 0.22);
+    g.gain.linearRampToValueAtTime(vol, time + 0.28);
     g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
 
     s.connect(filter).connect(g).connect(dest);
@@ -974,76 +1065,78 @@ export class AudioEngine {
     osc.stop(time + dur + 0.005);
   }
 
-  // --- 14. FUSA DEL GATTO (Cat purr: multi-harmonic chest vibration + laryngeal flutter + breathing) ---
+  // --- 14. FUSA DEL GATTO (Authentic dual-phase feline purr: inhalation/exhalation glottal twitch train + chest resonance) ---
   private catPurrChannel(gain: GainNode): Channel {
     const ctx = this.ensureContext();
-    const osc1 = ctx.createOscillator();
-    osc1.type = "triangle";
-    osc1.frequency.value = 72;
+    const cycleDuration = 3.6; // 3.6s full breath cycle (inhalation + exhalation)
+    const length = Math.floor(ctx.sampleRate * cycleDuration);
+    const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    const sr = ctx.sampleRate;
 
-    const osc2 = ctx.createOscillator();
-    osc2.type = "sawtooth";
-    osc2.frequency.value = 144;
-    const g2 = ctx.createGain();
-    g2.gain.value = 0.35;
-    osc2.connect(g2);
+    // Phase 1: Inhalation (0.0s to 1.65s) -> twitch rate ~27Hz, chest freq ~106Hz, throat ~255Hz
+    // Phase 2: Exhalation (1.80s to 3.45s) -> twitch rate ~23.5Hz, chest freq ~86Hz, throat ~210Hz
+    const inhaleEnd = 1.65;
+    const exhaleStart = 1.80;
+    const exhaleEnd = 3.45;
 
-    const osc3 = ctx.createOscillator();
-    osc3.type = "triangle";
-    osc3.frequency.value = 216;
-    const g3 = ctx.createGain();
-    g3.gain.value = 0.22;
-    osc3.connect(g3);
+    // Generate inhalation pulses
+    let t = 0.04;
+    const inhalePeriod = 1 / 27.0;
+    while (t < inhaleEnd) {
+      const progress = t / inhaleEnd;
+      const breathAmp = Math.sin(progress * Math.PI) * 0.85 + 0.15;
+      const pulseLen = Math.floor(sr * 0.024);
+      const startIdx = Math.floor(t * sr);
+      for (let i = 0; i < pulseLen && startIdx + i < length; i++) {
+        const pTime = i / sr;
+        const decay = Math.exp(-pTime / 0.007);
+        const val = (Math.sin(2 * Math.PI * 106 * pTime) * 0.65 +
+                     Math.sin(2 * Math.PI * 255 * pTime) * 0.35 +
+                     (Math.random() * 2 - 1) * 0.15) * decay * breathAmp;
+        data[startIdx + i] += val * 0.75;
+      }
+      t += inhalePeriod + (Math.random() - 0.5) * 0.002;
+    }
 
-    const mixer = ctx.createGain();
-    osc1.connect(mixer);
-    g2.connect(mixer);
-    g3.connect(mixer);
+    // Generate exhalation pulses
+    t = exhaleStart;
+    const exhalePeriod = 1 / 23.8;
+    while (t < exhaleEnd) {
+      const progress = (t - exhaleStart) / (exhaleEnd - exhaleStart);
+      const breathAmp = Math.sin(progress * Math.PI) * 0.9 + 0.2;
+      const pulseLen = Math.floor(sr * 0.028);
+      const startIdx = Math.floor(t * sr);
+      for (let i = 0; i < pulseLen && startIdx + i < length; i++) {
+        const pTime = i / sr;
+        const decay = Math.exp(-pTime / 0.009);
+        const val = (Math.sin(2 * Math.PI * 86 * pTime) * 0.72 +
+                     Math.sin(2 * Math.PI * 210 * pTime) * 0.28 +
+                     (Math.random() * 2 - 1) * 0.12) * decay * breathAmp;
+        data[startIdx + i] += val * 0.85;
+      }
+      t += exhalePeriod + (Math.random() - 0.5) * 0.002;
+    }
 
-    const flutterLfo = ctx.createOscillator();
-    flutterLfo.type = "triangle";
-    flutterLfo.frequency.value = 23.5;
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
 
-    const flutterDepth = ctx.createGain();
-    flutterDepth.gain.value = 0.58;
+    // Body resonator filter
+    const bodyFilter = ctx.createBiquadFilter();
+    bodyFilter.type = "lowpass";
+    bodyFilter.frequency.value = 420;
 
-    const flutterMod = ctx.createGain();
-    flutterMod.gain.value = 0.52;
-    flutterLfo.connect(flutterDepth).connect(flutterMod.gain);
+    const purrGain = ctx.createGain();
+    purrGain.gain.value = 0.85;
 
-    const breathLfo = ctx.createOscillator();
-    breathLfo.type = "sine";
-    breathLfo.frequency.value = 0.29;
-
-    const breathDepth = ctx.createGain();
-    breathDepth.gain.value = 0.28;
-
-    const breathMod = ctx.createGain();
-    breathMod.gain.value = 0.72;
-    breathLfo.connect(breathDepth).connect(breathMod.gain);
-
-    const throatFilter = ctx.createBiquadFilter();
-    throatFilter.type = "lowpass";
-    throatFilter.frequency.value = 340;
-
-    mixer.connect(flutterMod).connect(breathMod).connect(throatFilter).connect(gain);
-
-    osc1.start();
-    osc2.start();
-    osc3.start();
-    flutterLfo.start();
-    breathLfo.start();
+    source.connect(bodyFilter).connect(purrGain).connect(gain);
+    source.start();
 
     return {
       gain,
       stop: () => {
-        try {
-          osc1.stop();
-          osc2.stop();
-          osc3.stop();
-          flutterLfo.stop();
-          breathLfo.stop();
-        } catch {}
+        try { source.stop(); } catch {}
       },
     };
   }
