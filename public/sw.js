@@ -1,5 +1,5 @@
-const CACHE = "sleepscape-v3";
-const PRECACHE_ASSETS = ["/", "/manifest.webmanifest", "/icon.svg"];
+const CACHE = "sleepscape-v4";
+const PRECACHE_ASSETS = ["/", "/manifest.webmanifest", "/icon.svg", "/favicon.ico", "/icon-48x48.png", "/icon-96x96.png", "/icon-192x192.png"];
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
