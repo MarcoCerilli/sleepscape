@@ -1,0 +1,103 @@
+import type { Mix, Scenario, SoundId } from "./types";
+
+export const SOUND_LABELS: Record<SoundId, { label: string; emoji: string; category?: string }> = {
+  waves: { label: "Onde", emoji: "🌊", category: "Natura" },
+  rain: { label: "Pioggia", emoji: "🌧️", category: "Meteo" },
+  wind: { label: "Vento", emoji: "🌬️", category: "Meteo" },
+  thunder: { label: "Tuoni lontani", emoji: "⚡", category: "Meteo" },
+  snow: { label: "Bufera di neve", emoji: "❄️", category: "Meteo" },
+  stream: { label: "Ruscello", emoji: "💧", category: "Natura" },
+  forest: { label: "Bosco & Uccelli", emoji: "🌲", category: "Natura" },
+  night: { label: "Notte estiva", emoji: "🌙", category: "Natura" },
+  fire: { label: "Camino a legna", emoji: "🔥", category: "Casa" },
+  catPurr: { label: "Fusa del gatto", emoji: "🐱", category: "Casa" },
+  hairdryer: { label: "Phon", emoji: "💨", category: "Casa" },
+  heater: { label: "Scaldino / Caldobagno", emoji: "♨️", category: "Casa" },
+  clock: { label: "Ticchettio orologio", emoji: "🕰️", category: "Casa" },
+  train: { label: "Treno", emoji: "🚆", category: "Viaggio" },
+  brownNoise: { label: "Rumore bruno", emoji: "🟤", category: "Focus" },
+};
+
+export const EMPTY_MIX: Mix = {
+  waves: 0,
+  rain: 0,
+  wind: 0,
+  thunder: 0,
+  snow: 0,
+  stream: 0,
+  forest: 0,
+  night: 0,
+  fire: 0,
+  catPurr: 0,
+  hairdryer: 0,
+  heater: 0,
+  clock: 0,
+  train: 0,
+  brownNoise: 0,
+};
+
+export const SCENARIOS: Scenario[] = [
+  {
+    id: "cabin-snow",
+    name: "Baita nella neve",
+    emoji: "🪵",
+    description: "Camino scoppiettante, vento gelido e bufera di neve fuori dalla finestra.",
+    mix: { ...EMPTY_MIX, fire: 65, snow: 50, wind: 22, brownNoise: 14 },
+  },
+  {
+    id: "bathroom-heater",
+    name: "Bagno caldo & Relax",
+    emoji: "🛁",
+    description: "Ronzio avvolgente di scaldino e getto caldo del phon post-doccia.",
+    mix: { ...EMPTY_MIX, heater: 68, hairdryer: 30, brownNoise: 15 },
+  },
+  {
+    id: "summer-storm",
+    name: "Temporale notturno",
+    emoji: "⛈️",
+    description: "Pioggia battente, raffiche di vento e brontolii di tuoni in lontananza.",
+    mix: { ...EMPTY_MIX, rain: 72, thunder: 55, wind: 32, brownNoise: 20 },
+  },
+  {
+    id: "sea-house",
+    name: "Casa sul mare",
+    emoji: "🌊",
+    description: "Onde lunghe sulla battigia, brezza marina e notte tranquilla.",
+    mix: { ...EMPTY_MIX, waves: 75, wind: 18, night: 15 },
+  },
+  {
+    id: "cozy-cat",
+    name: "Serata con il gatto",
+    emoji: "🐱",
+    description: "Fusa profonde e ritmiche sul piumone, camino acceso e pioggia leggera.",
+    mix: { ...EMPTY_MIX, catPurr: 72, fire: 42, rain: 24, night: 12 },
+  },
+  {
+    id: "mountain-stream",
+    name: "Ruscello alpino",
+    emoji: "💧",
+    description: "Acqua che gorgoglia tra i sassi, uccellini e brezza tra i pini.",
+    mix: { ...EMPTY_MIX, stream: 68, forest: 38, wind: 16 },
+  },
+  {
+    id: "night-train",
+    name: "Treno notturno",
+    emoji: "🚆",
+    description: "Oscillazione regolare sui binari, rumore di fondo e notte che scorre.",
+    mix: { ...EMPTY_MIX, train: 66, brownNoise: 32, night: 14 },
+  },
+  {
+    id: "vintage-bedroom",
+    name: "Stanza della nonna",
+    emoji: "🕰️",
+    description: "Ticchettio ipnotico dell'orologio da tavolo con pioggia fuori.",
+    mix: { ...EMPTY_MIX, clock: 55, rain: 28, brownNoise: 18 },
+  },
+  {
+    id: "deep-sleep",
+    name: "Sonno profondo",
+    emoji: "😴",
+    description: "Rumore bruno denso e continuo che maschera qualsiasi disturbo esterno.",
+    mix: { ...EMPTY_MIX, brownNoise: 80, rain: 15 },
+  },
+];
