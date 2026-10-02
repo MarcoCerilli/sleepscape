@@ -27,10 +27,12 @@ export class AudioEngine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private channels = new Map<SoundId, Channel>();
+  private keepAliveOsc: OscillatorNode | null = null;
 
   private ensureContext() {
     if (!this.ctx) {
-      this.ctx = new AudioContext();
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      this.ctx = new AudioCtx();
       this.master = this.ctx.createGain();
       this.master.gain.value = 0.8;
       this.master.connect(this.ctx.destination);
@@ -38,9 +40,30 @@ export class AudioEngine {
     return this.ctx;
   }
 
+  /**
+   * Mantiene attivo il thread audio WebKit su iOS anche a schermo spento
+   * tramite una frequenza sub-udibile (20Hz) a volume impercettibile (0.00002).
+   */
+  enableKeepAliveCarrier() {
+    const ctx = this.ensureContext();
+    if (this.keepAliveOsc) return;
+    try {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 20;
+      gain.gain.value = 0.00002;
+      osc.connect(gain).connect(ctx.destination);
+      osc.start();
+      this.keepAliveOsc = osc;
+    } catch {}
+  }
+
   async start(mix: Mix) {
     const ctx = this.ensureContext();
     if (ctx.state === "suspended") await ctx.resume();
+
+    this.enableKeepAliveCarrier();
 
     for (const id of SOUND_IDS) {
       if (!this.channels.has(id)) this.channels.set(id, this.createChannel(id));
@@ -51,6 +74,13 @@ export class AudioEngine {
   stop() {
     this.channels.forEach((channel) => channel.stop());
     this.channels.clear();
+    if (this.keepAliveOsc) {
+      try {
+        this.keepAliveOsc.stop();
+        this.keepAliveOsc.disconnect();
+      } catch {}
+      this.keepAliveOsc = null;
+    }
     if (this.ctx) {
       void this.ctx.close();
       this.ctx = null;
@@ -80,26 +110,34 @@ export class AudioEngine {
     this.master.gain.linearRampToValueAtTime(value, now + seconds);
   }
 
-  playWakeChime(durationSeconds = 50) {
+  playWakeChime(durationSeconds = 45) {
     const ctx = this.ensureContext();
     if (!this.master) return;
     const now = ctx.currentTime;
     const wakeGain = ctx.createGain();
     wakeGain.gain.setValueAtTime(0.0001, now);
-    wakeGain.gain.exponentialRampToValueAtTime(0.24, now + Math.min(18, durationSeconds * 0.45));
-    wakeGain.gain.setValueAtTime(0.24, now + Math.min(18, durationSeconds * 0.45));
+    wakeGain.gain.exponentialRampToValueAtTime(0.28, now + Math.min(14, durationSeconds * 0.35));
+    wakeGain.gain.setValueAtTime(0.28, now + Math.min(22, durationSeconds * 0.55));
     wakeGain.gain.exponentialRampToValueAtTime(0.0001, now + durationSeconds);
     wakeGain.connect(this.master);
 
-    [261.63, 329.63, 392.0, 523.25].forEach((freq, index) => {
+    // Scala armonica dolce e cristallina (Do4, Mi4, Sol4, Do5, Mi5)
+    const freqs = [261.63, 329.63, 392.0, 523.25, 659.25];
+    freqs.forEach((freq, index) => {
       const osc = ctx.createOscillator();
-      const g = ctx.createGain();
+      const bellGain = ctx.createGain();
+      const startTime = now + index * 0.65;
+
       osc.type = "sine";
       osc.frequency.value = freq;
-      g.gain.value = 0.09 / (index + 1);
-      osc.connect(g).connect(wakeGain);
-      osc.start(now + index * 0.7);
-      osc.stop(now + durationSeconds);
+
+      bellGain.gain.setValueAtTime(0.0001, startTime);
+      bellGain.gain.linearRampToValueAtTime(0.14 / (index + 1), startTime + 0.03);
+      bellGain.gain.exponentialRampToValueAtTime(0.0001, startTime + 4.5);
+
+      osc.connect(bellGain).connect(wakeGain);
+      osc.start(startTime);
+      osc.stop(startTime + 4.6);
     });
   }
 
@@ -318,19 +356,19 @@ export class AudioEngine {
     return { gain, stop: () => { try { source.stop(); } catch {} } };
   }
 
-  // --- 5. CAMINO (Fireplace: warm flame roar + crisp irregular crackles + wood snaps) ---
+  // --- 5. CAMINO A LEGNA (Fireplace: warm convection hearth roar + realistic sap crackles + deep wood log fracture snaps) ---
   private fireChannel(gain: GainNode): Channel {
     const ctx = this.ensureContext();
 
-    // 1. Continuous warm flame draft
+    // 1. Continuous deep warm flame draft with natural convection modulation
     const length = ctx.sampleRate * 4;
     const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
     const data = buffer.getChannelData(0);
     let last = 0;
     for (let i = 0; i < length; i++) {
       const white = Math.random() * 2 - 1;
-      last = (last + 0.025 * white) / 1.025;
-      data[i] = last * 2.6;
+      last = (last + 0.028 * white) / 1.028;
+      data[i] = last * 2.9;
     }
     const flameSource = ctx.createBufferSource();
     flameSource.buffer = buffer;
@@ -338,14 +376,22 @@ export class AudioEngine {
 
     const flameFilter = ctx.createBiquadFilter();
     flameFilter.type = "lowpass";
-    flameFilter.frequency.value = 420;
+    flameFilter.frequency.value = 360;
+
+    const convectionLfo = ctx.createOscillator();
+    convectionLfo.type = "sine";
+    convectionLfo.frequency.value = 0.28;
+    const convectionGain = ctx.createGain();
+    convectionGain.gain.value = 80;
+    convectionLfo.connect(convectionGain).connect(flameFilter.frequency);
 
     const flameGain = ctx.createGain();
-    flameGain.gain.value = 0.42;
+    flameGain.gain.value = 0.45;
     flameSource.connect(flameFilter).connect(flameGain).connect(gain);
     flameSource.start();
+    convectionLfo.start();
 
-    // 2. High-frequency crackles and wood snaps
+    // 2. High-density organic wood sap crackles and log fracture snaps
     let isStopped = false;
     let crackleTimeout: number | null = null;
     let snapTimeout: number | null = null;
@@ -353,23 +399,24 @@ export class AudioEngine {
     const scheduleCrackles = () => {
       if (isStopped || ctx.state === "closed") return;
       const t = ctx.currentTime;
+      // Burst cluster of 1 to 4 micro-pops
       const count = 1 + Math.floor(Math.random() * 3);
       for (let c = 0; c < count; c++) {
-        const crackleTime = t + c * (0.008 + Math.random() * 0.018);
+        const crackleTime = t + c * (0.005 + Math.random() * 0.015);
         this.playWoodCrackle(ctx, gain, crackleTime);
       }
-      crackleTimeout = window.setTimeout(scheduleCrackles, 25 + Math.random() * 70);
+      crackleTimeout = window.setTimeout(scheduleCrackles, 30 + Math.random() * 85);
     };
 
     const scheduleSnap = () => {
       if (isStopped || ctx.state === "closed") return;
       const t = ctx.currentTime;
       this.playWoodSnap(ctx, gain, t);
-      snapTimeout = window.setTimeout(scheduleSnap, 1200 + Math.random() * 2400);
+      snapTimeout = window.setTimeout(scheduleSnap, 1400 + Math.random() * 2600);
     };
 
     scheduleCrackles();
-    snapTimeout = window.setTimeout(scheduleSnap, 500);
+    snapTimeout = window.setTimeout(scheduleSnap, 600);
 
     return {
       gain,
@@ -377,65 +424,89 @@ export class AudioEngine {
         isStopped = true;
         if (crackleTimeout !== null) window.clearTimeout(crackleTimeout);
         if (snapTimeout !== null) window.clearTimeout(snapTimeout);
-        try { flameSource.stop(); } catch {}
+        try {
+          flameSource.stop();
+          convectionLfo.stop();
+        } catch {}
       },
     };
   }
 
   private playWoodCrackle(ctx: AudioContext, dest: GainNode, time: number) {
     if (ctx.state === "closed") return;
-    const dur = 0.003 + Math.random() * 0.006;
+    const dur = 0.0025 + Math.random() * 0.004;
     const len = Math.max(16, Math.floor(ctx.sampleRate * dur));
     const buf = ctx.createBuffer(1, len, ctx.sampleRate);
     const d = buf.getChannelData(0);
     for (let i = 0; i < len; i++) {
-      d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (len * 0.3));
+      d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (len * 0.22));
     }
     const s = ctx.createBufferSource();
     s.buffer = buf;
 
-    const hp = ctx.createBiquadFilter();
-    hp.type = "highpass";
-    hp.frequency.value = 1900 + Math.random() * 1100;
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = 2800 + Math.random() * 2400;
+    bp.Q.value = 2.8;
 
     const g = ctx.createGain();
-    g.gain.setValueAtTime(0.001, time);
-    g.gain.linearRampToValueAtTime(0.24 + Math.random() * 0.22, time + 0.001);
+    g.gain.setValueAtTime(0.0001, time);
+    g.gain.linearRampToValueAtTime(0.26 + Math.random() * 0.22, time + 0.0008);
     g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
 
-    s.connect(hp).connect(g).connect(dest);
+    s.connect(bp).connect(g).connect(dest);
     s.start(time);
     s.stop(time + dur + 0.005);
   }
 
   private playWoodSnap(ctx: AudioContext, dest: GainNode, time: number) {
     if (ctx.state === "closed") return;
+
+    // 1. Initial sharp wood fiber fracture pop
+    const dur = 0.006;
+    const len = Math.floor(ctx.sampleRate * dur);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (len * 0.2));
+    const noiseSrc = ctx.createBufferSource();
+    noiseSrc.buffer = buf;
+    const hp = ctx.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 1800;
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.42, time);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+    noiseSrc.connect(hp).connect(noiseGain).connect(dest);
+    noiseSrc.start(time);
+    noiseSrc.stop(time + dur + 0.002);
+
+    // 2. Hollow wooden log body cavity thud
     const osc = ctx.createOscillator();
     const g = ctx.createGain();
     const bp = ctx.createBiquadFilter();
 
-    const freq = 850 + Math.random() * 600;
+    const freq = 220 + Math.random() * 180;
     osc.type = "triangle";
-    osc.frequency.setValueAtTime(freq, time);
-    osc.frequency.exponentialRampToValueAtTime(freq * 0.5, time + 0.04);
+    osc.frequency.setValueAtTime(freq * 1.5, time);
+    osc.frequency.exponentialRampToValueAtTime(freq * 0.6, time + 0.06);
 
     bp.type = "bandpass";
     bp.frequency.value = freq;
-    bp.Q.value = 3.5;
+    bp.Q.value = 3.2;
 
     g.gain.setValueAtTime(0.001, time);
-    g.gain.linearRampToValueAtTime(0.35 + Math.random() * 0.2, time + 0.002);
-    g.gain.exponentialRampToValueAtTime(0.0001, time + 0.045);
+    g.gain.linearRampToValueAtTime(0.42 + Math.random() * 0.25, time + 0.003);
+    g.gain.exponentialRampToValueAtTime(0.0001, time + 0.075);
 
     osc.connect(bp).connect(g).connect(dest);
     osc.start(time);
-    osc.stop(time + 0.05);
+    osc.stop(time + 0.08);
   }
 
-  // --- 6. BOSCO E UCCELLINI (Canopy breeze in leaves + melodic bird phrases) ---
+  // --- 6. BOSCO E UCCELLINI (Canopy breeze in leaves + realistic polyphonic FM songbird phrases) ---
   private forestChannel(gain: GainNode): Channel {
     const ctx = this.ensureContext();
-    // 1. Continuous canopy leaf rustle
+    // 1. Continuous canopy leaf rustle with gentle wind drift
     const length = ctx.sampleRate * 4;
     const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
     const data = buffer.getChannelData(0);
@@ -444,7 +515,7 @@ export class AudioEngine {
       const white = Math.random() * 2 - 1;
       b0 = 0.992 * b0 + white * 0.05;
       b1 = 0.96 * b1 + white * 0.08;
-      data[i] = (b0 + b1) * 0.28;
+      data[i] = (b0 + b1) * 0.26;
     }
     const canopySource = ctx.createBufferSource();
     canopySource.buffer = buffer;
@@ -452,142 +523,244 @@ export class AudioEngine {
 
     const canopyFilter = ctx.createBiquadFilter();
     canopyFilter.type = "bandpass";
-    canopyFilter.frequency.value = 850;
-    canopyFilter.Q.value = 0.8;
+    canopyFilter.frequency.value = 920;
+    canopyFilter.Q.value = 0.75;
+
+    const canopyLfo = ctx.createOscillator();
+    canopyLfo.type = "sine";
+    canopyLfo.frequency.value = 0.14;
+    const canopyLfoGain = ctx.createGain();
+    canopyLfoGain.gain.value = 240;
+    canopyLfo.connect(canopyLfoGain).connect(canopyFilter.frequency);
 
     const canopyGain = ctx.createGain();
-    canopyGain.gain.value = 0.35;
+    canopyGain.gain.value = 0.38;
     canopySource.connect(canopyFilter).connect(canopyGain).connect(gain);
     canopySource.start();
+    canopyLfo.start();
 
-    // 2. Natural bird song motifs
+    // 2. Realistic songbird motifs (European robin, blackbird warble, soft trills)
     let isStopped = false;
     let birdTimeout: number | null = null;
 
     const scheduleBirdPhrase = () => {
       if (isStopped || ctx.state === "closed") return;
       const t = ctx.currentTime;
-      this.playBirdMotif(ctx, gain, t);
-      birdTimeout = window.setTimeout(scheduleBirdPhrase, 1800 + Math.random() * 2600);
+      this.playOrganicBirdSong(ctx, gain, t);
+      birdTimeout = window.setTimeout(scheduleBirdPhrase, 1700 + Math.random() * 2800);
     };
 
-    birdTimeout = window.setTimeout(scheduleBirdPhrase, 400);
+    birdTimeout = window.setTimeout(scheduleBirdPhrase, 350);
 
     return {
       gain,
       stop: () => {
         isStopped = true;
         if (birdTimeout !== null) window.clearTimeout(birdTimeout);
-        try { canopySource.stop(); } catch {}
+        try {
+          canopySource.stop();
+          canopyLfo.stop();
+        } catch {}
       },
     };
   }
 
-  private playBirdMotif(ctx: AudioContext, dest: GainNode, startTime: number) {
+  private playOrganicBirdSong(ctx: AudioContext, dest: GainNode, startTime: number) {
     if (ctx.state === "closed") return;
-    const phraseType = Math.random();
-    if (phraseType < 0.45) {
-      this.playBirdChirp(ctx, dest, startTime, 2600, 3100, 0.11);
-      this.playBirdChirp(ctx, dest, startTime + 0.14, 2900, 3500, 0.13);
-    } else if (phraseType < 0.8) {
-      this.playBirdChirp(ctx, dest, startTime, 3200, 3400, 0.08);
-      this.playBirdChirp(ctx, dest, startTime + 0.11, 3400, 3650, 0.08);
-      this.playBirdChirp(ctx, dest, startTime + 0.22, 3100, 2800, 0.12);
+    const motif = Math.random();
+
+    if (motif < 0.4) {
+      // Motif A: Sweet Robin melodic two-phrase chirp
+      this.playFmBirdNote(ctx, dest, startTime, 2750, 3350, 0.11, 24, 60);
+      this.playFmBirdNote(ctx, dest, startTime + 0.15, 3100, 3680, 0.13, 26, 75);
+    } else if (motif < 0.75) {
+      // Motif B: Descending warble trill with vibrant flutter
+      this.playFmBirdNote(ctx, dest, startTime, 3450, 3150, 0.09, 28, 90);
+      this.playFmBirdNote(ctx, dest, startTime + 0.12, 3200, 2900, 0.09, 28, 80);
+      this.playFmBirdNote(ctx, dest, startTime + 0.24, 2950, 2600, 0.14, 22, 50);
     } else {
-      this.playBirdChirp(ctx, dest, startTime, 3500, 2700, 0.18);
+      // Motif C: Distant morning wood warbler flourish
+      this.playFmBirdNote(ctx, dest, startTime, 3600, 3950, 0.08, 30, 95);
+      this.playFmBirdNote(ctx, dest, startTime + 0.10, 3850, 4200, 0.08, 32, 100);
+      this.playFmBirdNote(ctx, dest, startTime + 0.22, 3300, 2850, 0.16, 20, 60);
     }
   }
 
-  private playBirdChirp(ctx: AudioContext, dest: GainNode, time: number, startFreq: number, endFreq: number, dur: number) {
+  private playFmBirdNote(
+    ctx: AudioContext,
+    dest: GainNode,
+    time: number,
+    startFreq: number,
+    endFreq: number,
+    dur: number,
+    vibratoRate = 24,
+    vibratoDepth = 70
+  ) {
     if (ctx.state === "closed") return;
-    const osc = ctx.createOscillator();
-    const g = ctx.createGain();
 
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(startFreq, time);
-    osc.frequency.exponentialRampToValueAtTime(endFreq, time + dur * 0.8);
+    // Carrier oscillator (bird vocalization)
+    const carrier = ctx.createOscillator();
+    carrier.type = "sine";
+    carrier.frequency.setValueAtTime(startFreq, time);
+    carrier.frequency.exponentialRampToValueAtTime(endFreq, time + dur * 0.85);
 
-    g.gain.setValueAtTime(0.0001, time);
-    g.gain.linearRampToValueAtTime(0.14, time + dur * 0.2);
-    g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+    // Natural frequency modulation (FM vibrato / trill)
+    const modulator = ctx.createOscillator();
+    modulator.type = "sine";
+    modulator.frequency.value = vibratoRate;
+    const modGain = ctx.createGain();
+    modGain.gain.value = vibratoDepth;
+    modulator.connect(modGain).connect(carrier.frequency);
 
-    osc.connect(g).connect(dest);
-    osc.start(time);
-    osc.stop(time + dur + 0.02);
+    // Soft organic volume envelope
+    const noteGain = ctx.createGain();
+    noteGain.gain.setValueAtTime(0.0001, time);
+    noteGain.gain.linearRampToValueAtTime(0.13, time + dur * 0.22);
+    noteGain.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+
+    carrier.connect(noteGain).connect(dest);
+
+    modulator.start(time);
+    carrier.start(time);
+    modulator.stop(time + dur + 0.02);
+    carrier.stop(time + dur + 0.02);
   }
 
-  // --- 7. TRENO (Train: rolling rumble + rhythmic 4-beat wheel rail clatter) ---
+  // --- 7. TRENO NOTTURNO (Night train: coach chassis sub-bass suspension + rhythmic dual-bogie rail clatter) ---
   private trainChannel(gain: GainNode): Channel {
     const ctx = this.ensureContext();
-    const length = ctx.sampleRate * 2;
+
+    // 1. Continuous coach carriage rolling friction & sub-bass chassis drone
+    const length = ctx.sampleRate * 3;
     const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
     const data = buffer.getChannelData(0);
     let last = 0;
     for (let i = 0; i < length; i++) {
       const white = Math.random() * 2 - 1;
-      last = (last + 0.04 * white) / 1.04;
-      data[i] = last * 2.8;
+      last = (last + 0.03 * white) / 1.03;
+      data[i] = last * 2.6;
     }
-    const rumbleSource = ctx.createBufferSource();
-    rumbleSource.buffer = buffer;
-    rumbleSource.loop = true;
+    const trackSource = ctx.createBufferSource();
+    trackSource.buffer = buffer;
+    trackSource.loop = true;
 
-    const rumbleFilter = ctx.createBiquadFilter();
-    rumbleFilter.type = "bandpass";
-    rumbleFilter.frequency.value = 220;
-    rumbleFilter.Q.value = 1.1;
+    const trackFilter = ctx.createBiquadFilter();
+    trackFilter.type = "lowpass";
+    trackFilter.frequency.value = 180;
 
-    const rumbleGain = ctx.createGain();
-    rumbleGain.gain.value = 0.55;
-    rumbleSource.connect(rumbleFilter).connect(rumbleGain).connect(gain);
-    rumbleSource.start();
+    const trackGain = ctx.createGain();
+    trackGain.gain.value = 0.58;
+    trackSource.connect(trackFilter).connect(trackGain).connect(gain);
+    trackSource.start();
 
+    // Carriage suspension sway (gentle 0.28Hz lateral rocking)
+    const subDrone = ctx.createOscillator();
+    subDrone.type = "sine";
+    subDrone.frequency.value = 52;
+    const subGain = ctx.createGain();
+    subGain.gain.value = 0.18;
+
+    const swayLfo = ctx.createOscillator();
+    swayLfo.type = "sine";
+    swayLfo.frequency.value = 0.28;
+    const swayGain = ctx.createGain();
+    swayGain.gain.value = 0.07;
+    swayLfo.connect(swayGain).connect(subGain.gain);
+
+    subDrone.connect(subGain).connect(gain);
+    subDrone.start();
+    swayLfo.start();
+
+    // 2. Realistic 4-beat bogie wheel-pair rail joint cadence ("ta-tack ... ta-tack")
     let isStopped = false;
     let clickTimeout: number | null = null;
 
-    const scheduleClick = () => {
+    const scheduleBogies = () => {
       if (isStopped || ctx.state === "closed") return;
       const t = ctx.currentTime;
-      this.playRailClick(ctx, gain, t, 0.45, 460);
-      this.playRailClick(ctx, gain, t + 0.13, 0.58, 360);
-      this.playRailClick(ctx, gain, t + 0.45, 0.38, 480);
-      this.playRailClick(ctx, gain, t + 0.58, 0.48, 380);
-      clickTimeout = window.setTimeout(scheduleClick, 1350);
+
+      // Front bogie (Axle 1 & Axle 2)
+      this.playSteelRailImpact(ctx, gain, t, 0.46, 340);
+      this.playSteelRailImpact(ctx, gain, t + 0.115, 0.58, 310);
+
+      // Rear bogie (Axle 1 & Axle 2)
+      this.playSteelRailImpact(ctx, gain, t + 0.44, 0.40, 350);
+      this.playSteelRailImpact(ctx, gain, t + 0.555, 0.52, 320);
+
+      clickTimeout = window.setTimeout(scheduleBogies, 1380 + (Math.random() - 0.5) * 60);
     };
 
-    scheduleClick();
+    clickTimeout = window.setTimeout(scheduleBogies, 200);
 
     return {
       gain,
       stop: () => {
         isStopped = true;
         if (clickTimeout !== null) window.clearTimeout(clickTimeout);
-        try { rumbleSource.stop(); } catch {}
+        try {
+          trackSource.stop();
+          subDrone.stop();
+          swayLfo.stop();
+        } catch {}
       },
     };
   }
 
-  private playRailClick(ctx: AudioContext, destination: GainNode, time: number, vol: number, freq: number) {
+  private playSteelRailImpact(ctx: AudioContext, destination: GainNode, time: number, vol: number, freq: number) {
     if (ctx.state === "closed") return;
+
+    // 1. Steel wheel flange contact transient
+    const transientLen = Math.floor(ctx.sampleRate * 0.005);
+    const buf = ctx.createBuffer(1, transientLen, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < transientLen; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (transientLen * 0.25));
+    const noiseSrc = ctx.createBufferSource();
+    noiseSrc.buffer = buf;
+    const hp = ctx.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 2200;
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(vol * 0.4, time);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.005);
+    noiseSrc.connect(hp).connect(noiseGain).connect(destination);
+    noiseSrc.start(time);
+    noiseSrc.stop(time + 0.006);
+
+    // 2. Metallic rail steel ring resonance
     const osc = ctx.createOscillator();
     const g = ctx.createGain();
-    const f = ctx.createBiquadFilter();
+    const bp = ctx.createBiquadFilter();
 
     osc.type = "triangle";
     osc.frequency.setValueAtTime(freq, time);
-    osc.frequency.exponentialRampToValueAtTime(100, time + 0.06);
+    osc.frequency.exponentialRampToValueAtTime(freq * 0.75, time + 0.07);
 
-    f.type = "bandpass";
-    f.frequency.value = freq * 1.4;
-    f.Q.value = 2.4;
+    bp.type = "bandpass";
+    bp.frequency.value = freq;
+    bp.Q.value = 4.2;
 
     g.gain.setValueAtTime(0.0001, time);
-    g.gain.linearRampToValueAtTime(vol * 0.5, time + 0.005);
-    g.gain.exponentialRampToValueAtTime(0.0001, time + 0.065);
+    g.gain.linearRampToValueAtTime(vol * 0.5, time + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, time + 0.07);
 
-    osc.connect(f).connect(g).connect(destination);
+    osc.connect(bp).connect(g).connect(destination);
     osc.start(time);
-    osc.stop(time + 0.07);
+    osc.stop(time + 0.075);
+
+    // 3. Ballast / sleeper low thump
+    const subOsc = ctx.createOscillator();
+    const subG = ctx.createGain();
+    subOsc.type = "sine";
+    subOsc.frequency.setValueAtTime(68, time);
+    subOsc.frequency.exponentialRampToValueAtTime(42, time + 0.08);
+
+    subG.gain.setValueAtTime(0.0001, time);
+    subG.gain.linearRampToValueAtTime(vol * 0.6, time + 0.006);
+    subG.gain.exponentialRampToValueAtTime(0.0001, time + 0.08);
+
+    subOsc.connect(subG).connect(destination);
+    subOsc.start(time);
+    subOsc.stop(time + 0.085);
   }
 
   // --- 8. NOTTE ESTIVA (Warm ambient night + authentic polyphonic crickets) ---
@@ -992,36 +1165,63 @@ export class AudioEngine {
     };
   }
 
-  // --- 13. RUSCELLO (Babbling brook: flowing water bed + resonant Minnaert bubble chirps) ---
+  // --- 13. RUSCELLO ALPINO (Mountain stream: multi-tier turbulent liquid flow + authentic cavitation droplet bubbles) ---
   private streamChannel(gain: GainNode): Channel {
     const ctx = this.ensureContext();
     const length = ctx.sampleRate * 4;
     const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
     const data = buffer.getChannelData(0);
+    let last = 0;
     for (let i = 0; i < length; i++) {
-      data[i] = (Math.random() * 2 - 1) * 0.35;
+      const white = Math.random() * 2 - 1;
+      last = (last + 0.04 * white) / 1.04;
+      data[i] = last * 2.8;
     }
     const waterSource = ctx.createBufferSource();
     waterSource.buffer = buffer;
     waterSource.loop = true;
 
-    const bp1 = ctx.createBiquadFilter();
-    bp1.type = "bandpass";
-    bp1.frequency.value = 680;
-    bp1.Q.value = 1.6;
+    // 1. Deep rolling current through rounded riverbed stones
+    const deepFilter = ctx.createBiquadFilter();
+    deepFilter.type = "lowpass";
+    deepFilter.frequency.value = 460;
 
-    const bp2 = ctx.createBiquadFilter();
-    bp2.type = "bandpass";
-    bp2.frequency.value = 1500;
-    bp2.Q.value = 1.9;
+    const deepGain = ctx.createGain();
+    deepGain.gain.value = 0.52;
 
-    const flowGain = ctx.createGain();
-    flowGain.gain.value = 0.48;
+    // 2. Churning mid-frequency brook turbulence with slow eddy swirl
+    const midFilter = ctx.createBiquadFilter();
+    midFilter.type = "bandpass";
+    midFilter.frequency.value = 980;
+    midFilter.Q.value = 1.3;
 
-    waterSource.connect(bp1).connect(flowGain).connect(gain);
-    waterSource.connect(bp2).connect(flowGain).connect(gain);
+    const eddyLfo = ctx.createOscillator();
+    eddyLfo.type = "sine";
+    eddyLfo.frequency.value = 0.18;
+    const eddyGain = ctx.createGain();
+    eddyGain.gain.value = 220;
+    eddyLfo.connect(eddyGain).connect(midFilter.frequency);
+
+    const midGain = ctx.createGain();
+    midGain.gain.value = 0.44;
+
+    // 3. Crystalline surface spray and ripple splash
+    const sprayFilter = ctx.createBiquadFilter();
+    sprayFilter.type = "bandpass";
+    sprayFilter.frequency.value = 2400;
+    sprayFilter.Q.value = 1.6;
+
+    const sprayGain = ctx.createGain();
+    sprayGain.gain.value = 0.28;
+
+    waterSource.connect(deepFilter).connect(deepGain).connect(gain);
+    waterSource.connect(midFilter).connect(midGain).connect(gain);
+    waterSource.connect(sprayFilter).connect(sprayGain).connect(gain);
+
     waterSource.start();
+    eddyLfo.start();
 
+    // 4. Randomized natural water droplet cavitation plops (Minnaert bubbles)
     let isStopped = false;
     let bubbleTimeout: number | null = null;
 
@@ -1029,7 +1229,7 @@ export class AudioEngine {
       if (isStopped || ctx.state === "closed") return;
       const t = ctx.currentTime;
       this.playWaterBubble(ctx, gain, t);
-      bubbleTimeout = window.setTimeout(scheduleBubble, 70 + Math.random() * 180);
+      bubbleTimeout = window.setTimeout(scheduleBubble, 55 + Math.random() * 150);
     };
 
     scheduleBubble();
@@ -1039,7 +1239,10 @@ export class AudioEngine {
       stop: () => {
         isStopped = true;
         if (bubbleTimeout !== null) window.clearTimeout(bubbleTimeout);
-        try { waterSource.stop(); } catch {}
+        try {
+          waterSource.stop();
+          eddyLfo.stop();
+        } catch {}
       },
     };
   }
@@ -1049,86 +1252,103 @@ export class AudioEngine {
     const osc = ctx.createOscillator();
     const g = ctx.createGain();
 
-    const baseFreq = 750 + Math.random() * 700;
-    const dur = 0.025 + Math.random() * 0.025;
+    // Natural cavitation bubble pitch: starts at cavity formant and glides exponentially upward as bubble forms
+    const startFreq = 480 + Math.random() * 750;
+    const endFreq = startFreq * (1.28 + Math.random() * 0.32);
+    const dur = 0.024 + Math.random() * 0.028;
 
     osc.type = "sine";
-    osc.frequency.setValueAtTime(baseFreq, time);
-    osc.frequency.exponentialRampToValueAtTime(baseFreq * (1.25 + Math.random() * 0.35), time + dur);
+    osc.frequency.setValueAtTime(startFreq, time);
+    osc.frequency.exponentialRampToValueAtTime(endFreq, time + dur * 0.85);
 
     g.gain.setValueAtTime(0.0001, time);
-    g.gain.linearRampToValueAtTime(0.12 + Math.random() * 0.08, time + 0.003);
+    g.gain.linearRampToValueAtTime(0.14 + Math.random() * 0.09, time + 0.003);
     g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
 
     osc.connect(g).connect(dest);
     osc.start(time);
-    osc.stop(time + dur + 0.005);
+    osc.stop(time + dur + 0.006);
   }
 
-  // --- 14. FUSA DEL GATTO (Authentic dual-phase feline purr: inhalation/exhalation glottal twitch train + chest resonance) ---
+  // --- 14. FUSA DEL GATTO (Authentic organic feline purr: dual-phase breathing + deep chest resonance + soft glottal twitches) ---
   private catPurrChannel(gain: GainNode): Channel {
     const ctx = this.ensureContext();
-    const cycleDuration = 3.6; // 3.6s full breath cycle (inhalation + exhalation)
+    const cycleDuration = 3.8; // 3.8s complete breathing cycle (Inhale + Exhale)
     const length = Math.floor(ctx.sampleRate * cycleDuration);
     const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
     const data = buffer.getChannelData(0);
     const sr = ctx.sampleRate;
 
-    // Phase 1: Inhalation (0.0s to 1.65s) -> twitch rate ~27Hz, chest freq ~106Hz, throat ~255Hz
-    // Phase 2: Exhalation (1.80s to 3.45s) -> twitch rate ~23.5Hz, chest freq ~86Hz, throat ~210Hz
-    const inhaleEnd = 1.65;
-    const exhaleStart = 1.80;
-    const exhaleEnd = 3.45;
+    // Dual-phase timing:
+    // Phase 1: Inhalation (0.0s to 1.75s) -> twitch rate ~26.4Hz, thoracic resonance ~112Hz, throat ~220Hz
+    // Transition pause: (1.75s to 1.90s)
+    // Phase 2: Exhalation (1.90s to 3.65s) -> twitch rate ~23.2Hz, deep chest resonance ~78Hz, throat ~185Hz
+    const inhaleEnd = 1.75;
+    const exhaleStart = 1.90;
+    const exhaleEnd = 3.65;
 
-    // Generate inhalation pulses
-    let t = 0.04;
-    const inhalePeriod = 1 / 27.0;
+    // Helper: generate soft raised-cosine glottal twitch impulse
+    const addGlottalImpulse = (startSec: number, pulseDur: number, f1: number, f2: number, amp: number) => {
+      const pLen = Math.floor(sr * pulseDur);
+      const startIdx = Math.floor(startSec * sr);
+      for (let i = 0; i < pLen && startIdx + i < length; i++) {
+        const pt = i / sr;
+        const env = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (pLen - 1))); // Raised cosine window
+        const decay = Math.exp(-pt / (pulseDur * 0.42));
+        const val = (Math.sin(2 * Math.PI * f1 * pt) * 0.7 +
+                     Math.sin(2 * Math.PI * f2 * pt) * 0.3) * env * decay * amp;
+        data[startIdx + i] += val;
+      }
+    };
+
+    // Synthesize Inhalation train
+    let t = 0.05;
+    const inhalePeriod = 1 / 26.4;
     while (t < inhaleEnd) {
       const progress = t / inhaleEnd;
-      const breathAmp = Math.sin(progress * Math.PI) * 0.85 + 0.15;
-      const pulseLen = Math.floor(sr * 0.024);
-      const startIdx = Math.floor(t * sr);
-      for (let i = 0; i < pulseLen && startIdx + i < length; i++) {
-        const pTime = i / sr;
-        const decay = Math.exp(-pTime / 0.007);
-        const val = (Math.sin(2 * Math.PI * 106 * pTime) * 0.65 +
-                     Math.sin(2 * Math.PI * 255 * pTime) * 0.35 +
-                     (Math.random() * 2 - 1) * 0.15) * decay * breathAmp;
-        data[startIdx + i] += val * 0.75;
-      }
+      const breathCurve = Math.sin(progress * Math.PI) * 0.85 + 0.15;
+      addGlottalImpulse(t, 0.024, 112, 220, breathCurve * 0.72);
       t += inhalePeriod + (Math.random() - 0.5) * 0.002;
     }
 
-    // Generate exhalation pulses
+    // Synthesize Exhalation train (deeper chest rumble)
     t = exhaleStart;
-    const exhalePeriod = 1 / 23.8;
+    const exhalePeriod = 1 / 23.2;
     while (t < exhaleEnd) {
       const progress = (t - exhaleStart) / (exhaleEnd - exhaleStart);
-      const breathAmp = Math.sin(progress * Math.PI) * 0.9 + 0.2;
-      const pulseLen = Math.floor(sr * 0.028);
-      const startIdx = Math.floor(t * sr);
-      for (let i = 0; i < pulseLen && startIdx + i < length; i++) {
-        const pTime = i / sr;
-        const decay = Math.exp(-pTime / 0.009);
-        const val = (Math.sin(2 * Math.PI * 86 * pTime) * 0.72 +
-                     Math.sin(2 * Math.PI * 210 * pTime) * 0.28 +
-                     (Math.random() * 2 - 1) * 0.12) * decay * breathAmp;
-        data[startIdx + i] += val * 0.85;
-      }
+      const breathCurve = Math.sin(progress * Math.PI) * 0.92 + 0.18;
+      addGlottalImpulse(t, 0.028, 78, 185, breathCurve * 0.88);
       t += exhalePeriod + (Math.random() - 0.5) * 0.002;
+    }
+
+    // Soft crossfade edges for seamless loop
+    const fadeLen = Math.floor(sr * 0.05);
+    for (let i = 0; i < fadeLen; i++) {
+      const ramp = i / fadeLen;
+      data[i] *= ramp;
+      data[length - 1 - i] *= ramp;
     }
 
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.loop = true;
 
-    // Body resonator filter
+    // Body resonator filter: warm chest resonance
     const bodyFilter = ctx.createBiquadFilter();
     bodyFilter.type = "lowpass";
-    bodyFilter.frequency.value = 420;
+    bodyFilter.frequency.value = 380;
+
+    // Subtle sub-bass body drone (62Hz) to feel the cat purr in the chest
+    const subOsc = ctx.createOscillator();
+    subOsc.type = "sine";
+    subOsc.frequency.value = 62;
+    const subGain = ctx.createGain();
+    subGain.gain.value = 0.12;
+    subOsc.connect(subGain).connect(gain);
+    subOsc.start();
 
     const purrGain = ctx.createGain();
-    purrGain.gain.value = 0.85;
+    purrGain.gain.value = 0.92;
 
     source.connect(bodyFilter).connect(purrGain).connect(gain);
     source.start();
@@ -1136,94 +1356,145 @@ export class AudioEngine {
     return {
       gain,
       stop: () => {
-        try { source.stop(); } catch {}
+        try {
+          source.stop();
+          subOsc.stop();
+        } catch {}
       },
     };
   }
 
-  // --- 15. TICCHETTIO OROLOGIO (Mechanical grandfather clock tic-tac) ---
+  // --- 15. TICCHETTIO OROLOGIO (Antique pendulum clock: distinct brass Tick and wooden Tock with escapement recoil) ---
   private clockChannel(gain: GainNode): Channel {
     const ctx = this.ensureContext();
     let isTick = true;
     let isStopped = false;
-    let intervalId: number | null = null;
+    let timerId: number | null = null;
 
-    const runTick = () => {
+    const runStroke = () => {
       if (isStopped || ctx.state === "closed") return;
       const t = ctx.currentTime;
-      const freq = isTick ? 1280 : 1020;
-      this.playMechanicalTick(ctx, gain, t, freq);
+      if (isTick) {
+        // "TICK": Brass escapement pallet strike + spring micro-recoil
+        this.playClockTick(ctx, gain, t);
+      } else {
+        // "TOCK": Resonant wooden clock case rebound
+        this.playClockTock(ctx, gain, t);
+      }
       isTick = !isTick;
+      timerId = window.setTimeout(runStroke, 1000);
     };
 
-    intervalId = window.setInterval(runTick, 1000);
-    runTick();
+    timerId = window.setTimeout(runStroke, 80);
 
     return {
       gain,
       stop: () => {
         isStopped = true;
-        if (intervalId !== null) window.clearInterval(intervalId);
+        if (timerId !== null) window.clearTimeout(timerId);
       },
     };
   }
 
-  private playMechanicalTick(ctx: AudioContext, dest: GainNode, time: number, resonanceFreq: number) {
+  private playClockTick(ctx: AudioContext, dest: GainNode, time: number) {
     if (ctx.state === "closed") return;
 
-    const noiseLen = Math.floor(ctx.sampleRate * 0.004);
+    // 1. Sharp impact transient (pallet contacting escapement wheel)
+    const noiseLen = Math.floor(ctx.sampleRate * 0.0035);
     const noiseBuf = ctx.createBuffer(1, noiseLen, ctx.sampleRate);
     const nd = noiseBuf.getChannelData(0);
-    for (let i = 0; i < noiseLen; i++) {
-      nd[i] = (Math.random() * 2 - 1) * Math.exp(-i / (noiseLen * 0.25));
-    }
+    for (let i = 0; i < noiseLen; i++) nd[i] = (Math.random() * 2 - 1) * Math.exp(-i / (noiseLen * 0.22));
     const noiseSrc = ctx.createBufferSource();
     noiseSrc.buffer = noiseBuf;
-
     const hp = ctx.createBiquadFilter();
     hp.type = "highpass";
-    hp.frequency.value = 2600;
-
+    hp.frequency.value = 2800;
     const noiseGain = ctx.createGain();
-    noiseGain.gain.setValueAtTime(0.32, time);
-    noiseGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.004);
-
+    noiseGain.gain.setValueAtTime(0.38, time);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.0035);
     noiseSrc.connect(hp).connect(noiseGain).connect(dest);
     noiseSrc.start(time);
-    noiseSrc.stop(time + 0.006);
+    noiseSrc.stop(time + 0.005);
 
+    // 2. Brass tooth chime ring (~1420Hz, narrow Q)
     const osc = ctx.createOscillator();
     const bp = ctx.createBiquadFilter();
     const g = ctx.createGain();
-
     osc.type = "triangle";
-    osc.frequency.setValueAtTime(resonanceFreq, time);
-    osc.frequency.exponentialRampToValueAtTime(resonanceFreq * 0.8, time + 0.035);
-
+    osc.frequency.setValueAtTime(1420, time);
+    osc.frequency.exponentialRampToValueAtTime(1180, time + 0.038);
     bp.type = "bandpass";
-    bp.frequency.value = resonanceFreq;
-    bp.Q.value = 5.5;
-
+    bp.frequency.value = 1420;
+    bp.Q.value = 6.2;
     g.gain.setValueAtTime(0.001, time);
-    g.gain.linearRampToValueAtTime(0.38, time + 0.002);
+    g.gain.linearRampToValueAtTime(0.42, time + 0.0015);
     g.gain.exponentialRampToValueAtTime(0.0001, time + 0.038);
-
     osc.connect(bp).connect(g).connect(dest);
     osc.start(time);
     osc.stop(time + 0.042);
 
+    // 3. Escapement spring micro-recoil rattle at +16ms
+    const rTime = time + 0.016;
     const reboundOsc = ctx.createOscillator();
     const reboundGain = ctx.createGain();
     reboundOsc.type = "sine";
-    reboundOsc.frequency.value = resonanceFreq * 1.4;
-
-    const rTime = time + 0.015;
+    reboundOsc.frequency.value = 2480;
     reboundGain.gain.setValueAtTime(0.001, rTime);
     reboundGain.gain.linearRampToValueAtTime(0.12, rTime + 0.001);
-    reboundGain.gain.exponentialRampToValueAtTime(0.0001, rTime + 0.018);
-
+    reboundGain.gain.exponentialRampToValueAtTime(0.0001, rTime + 0.016);
     reboundOsc.connect(reboundGain).connect(dest);
     reboundOsc.start(rTime);
-    reboundOsc.stop(rTime + 0.02);
+    reboundOsc.stop(rTime + 0.018);
+  }
+
+  private playClockTock(ctx: AudioContext, dest: GainNode, time: number) {
+    if (ctx.state === "closed") return;
+
+    // 1. Softer wooden casing impact transient
+    const noiseLen = Math.floor(ctx.sampleRate * 0.004);
+    const noiseBuf = ctx.createBuffer(1, noiseLen, ctx.sampleRate);
+    const nd = noiseBuf.getChannelData(0);
+    for (let i = 0; i < noiseLen; i++) nd[i] = (Math.random() * 2 - 1) * Math.exp(-i / (noiseLen * 0.28));
+    const noiseSrc = ctx.createBufferSource();
+    noiseSrc.buffer = noiseBuf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = 1600;
+    bp.Q.value = 2.0;
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.28, time);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.004);
+    noiseSrc.connect(bp).connect(noiseGain).connect(dest);
+    noiseSrc.start(time);
+    noiseSrc.stop(time + 0.005);
+
+    // 2. Warm wooden clock housing cavity resonance (~820Hz with deeper undertone)
+    const osc = ctx.createOscillator();
+    const bodyFilter = ctx.createBiquadFilter();
+    const g = ctx.createGain();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(820, time);
+    osc.frequency.exponentialRampToValueAtTime(640, time + 0.048);
+    bodyFilter.type = "bandpass";
+    bodyFilter.frequency.value = 820;
+    bodyFilter.Q.value = 4.5;
+    g.gain.setValueAtTime(0.001, time);
+    g.gain.linearRampToValueAtTime(0.38, time + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, time + 0.048);
+    osc.connect(bodyFilter).connect(g).connect(dest);
+    osc.start(time);
+    osc.stop(time + 0.052);
+
+    // 3. Wooden cabinet lower thump (~240Hz)
+    const thumpOsc = ctx.createOscillator();
+    const thumpGain = ctx.createGain();
+    thumpOsc.type = "sine";
+    thumpOsc.frequency.value = 240;
+    thumpGain.gain.setValueAtTime(0.001, time);
+    thumpGain.gain.linearRampToValueAtTime(0.18, time + 0.003);
+    thumpGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.04);
+    thumpOsc.connect(thumpGain).connect(dest);
+    thumpOsc.start(time);
+    thumpOsc.stop(time + 0.045);
   }
 }

@@ -2,11 +2,20 @@
   "name": "SleepScape",
   "short_name": "SleepScape",
   "description": "Crea il posto in cui vuoi dormire. Mixa suoni della natura e rumori rilassanti.",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "portrait-primary",
   "background_color": "#090a12",
   "theme_color": "#090a12",
   "icons": [
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
     {
       "src": "/icon-48x48.png",
       "sizes": "48x48",

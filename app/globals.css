@@ -859,3 +859,298 @@ footer b {
     gap: 8px;
   }
 }
+
+/* --- iOS PWA INSTALL BANNER & MODAL --- */
+.iosInstallBanner {
+  background: linear-gradient(135deg, rgba(155, 124, 255, 0.15), rgba(110, 231, 216, 0.12));
+  border: 1px solid rgba(155, 124, 255, 0.35);
+  border-radius: 16px;
+  padding: 14px 18px;
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  backdrop-filter: blur(12px);
+  animation: bannerFadeIn 0.3s ease;
+}
+
+@keyframes bannerFadeIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.iosInstallContent {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.iosIcon {
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.iosInstallContent b {
+  display: block;
+  font-size: 0.95rem;
+  color: var(--text);
+  margin-bottom: 3px;
+}
+
+.iosInstallContent p {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.iosInstallActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.mini {
+  padding: 7px 14px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.standaloneBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(110, 231, 216, 0.14);
+  border: 1px solid rgba(110, 231, 216, 0.35);
+  color: var(--accent2);
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  margin-left: 10px;
+}
+
+/* Modalità Notte / Comodino (OLED Pure Black) */
+.nightModeOverlay {
+  position: fixed;
+  inset: 0;
+  background: #000000;
+  z-index: 99999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: calc(30px + env(safe-area-inset-top, 0px)) 20px calc(30px + env(safe-area-inset-bottom, 0px));
+  color: #f6f3ff;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+.nightModeTop {
+  text-align: center;
+}
+
+.nightModeTop h3 {
+  margin: 0 0 4px;
+  font-size: 1.1rem;
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 600;
+}
+
+.nightModeTop p {
+  margin: 0;
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.nightModeCenter {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.nightModeClock {
+  font-size: clamp(4.2rem, 16vw, 7.5rem);
+  font-weight: 200;
+  letter-spacing: -0.04em;
+  color: rgba(246, 243, 255, 0.88);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 40px rgba(155, 124, 255, 0.25);
+}
+
+.nightModeAlarmBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(110, 231, 216, 0.08);
+  border: 1px solid rgba(110, 231, 216, 0.25);
+  color: var(--accent2);
+  padding: 8px 18px;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.nightPulse {
+  width: 8px;
+  height: 8px;
+  background: var(--accent2);
+  border-radius: 50%;
+  box-shadow: 0 0 10px var(--accent2);
+  animation: pulseDot 2s infinite ease-in-out;
+}
+
+@keyframes pulseDot {
+  0%, 100% { transform: scale(0.9); opacity: 0.5; }
+  50% { transform: scale(1.3); opacity: 1; }
+}
+
+.nightModeBottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.nightModeExitBtn {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--text);
+  padding: 12px 28px;
+  border-radius: 999px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.nightModeExitBtn:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* Modal Guida iOS */
+.iosModalBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.iosModalCard {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  max-width: 480px;
+  width: 100%;
+  padding: 26px;
+  color: var(--text);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+}
+
+.iosModalCard h3 {
+  margin: 0 0 14px;
+  font-size: 1.35rem;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.iosModalSteps {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 20px 0;
+}
+
+.iosModalStep {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.stepNum {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: var(--accent);
+  color: #090a12;
+  font-weight: 800;
+  font-size: 0.82rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.alarmControlsRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.btnTestAlarm {
+  background: rgba(110, 231, 216, 0.12);
+  border: 1px solid rgba(110, 231, 216, 0.3);
+  color: var(--accent2);
+  font-size: 0.85rem;
+  font-weight: 700;
+  padding: 8px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btnTestAlarm:hover {
+  background: rgba(110, 231, 216, 0.24);
+}
+
+.btnNightMode {
+  background: rgba(155, 124, 255, 0.14);
+  border: 1px solid rgba(155, 124, 255, 0.35);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 700;
+  padding: 8px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.btnNightMode:hover {
+  background: rgba(155, 124, 255, 0.28);
+}
+
+@media (max-width: 768px) {
+  .iosInstallBanner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .iosInstallActions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  body {
+    padding-bottom: calc(115px + env(safe-area-inset-bottom, 0px));
+  }
+  .bottomPlayer {
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+}

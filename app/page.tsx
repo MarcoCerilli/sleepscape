@@ -49,6 +49,45 @@ export default function Home() {
   const [alarmTime, setAlarmTime] = useState("07:30");
   const [alarmEnabled, setAlarmEnabled] = useState(false);
   const [alarmStatus, setAlarmStatus] = useState("Sveglia disattivata");
+  const [testAlarmCountdown, setTestAlarmCountdown] = useState<number | null>(null);
+
+  // iOS PWA & Standalone Detection
+  const [isIOS, setIsIOS] = useState(false);
+  const [isStandalone, setIsStandalone] = useState(false);
+  const [dismissIosBanner, setDismissIosBanner] = useState(false);
+  const [showIosModal, setShowIosModal] = useState(false);
+
+  // Modalità Comodino (Schermo Notte OLED) & Wake Lock
+  const [nightMode, setNightMode] = useState(false);
+  const [currentTimeStr, setCurrentTimeStr] = useState("");
+  const [wakeLockActive, setWakeLockActive] = useState(false);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+
+  // Richiesta Screen Wake Lock per impedire il blocco schermo/congelamento timer su iPhone
+  async function requestWakeLock() {
+    try {
+      if ("wakeLock" in navigator && !wakeLockRef.current) {
+        wakeLockRef.current = await navigator.wakeLock.request("screen");
+        setWakeLockActive(true);
+        wakeLockRef.current.addEventListener("release", () => {
+          wakeLockRef.current = null;
+          setWakeLockActive(false);
+        });
+      }
+    } catch {
+      setWakeLockActive(false);
+    }
+  }
+
+  async function releaseWakeLock() {
+    if (wakeLockRef.current) {
+      try {
+        await wakeLockRef.current.release();
+      } catch {}
+      wakeLockRef.current = null;
+      setWakeLockActive(false);
+    }
+  }
 
   // Memoria dei volumi precedenti per consentire play/pausa rapido su ogni singolo suono
   const [prevVolumes, setPrevVolumes] = useState<Record<SoundId, number>>(() => {
@@ -58,6 +97,32 @@ export default function Home() {
   });
 
   useEffect(() => {
+    // Rileva iOS e modalità Standalone PWA
+    if (typeof window !== "undefined") {
+      const isApple =
+        /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+      setIsIOS(isApple);
+
+      const standalone =
+        (window.navigator as unknown as { standalone?: boolean }).standalone === true ||
+        window.matchMedia("(display-mode: standalone)").matches;
+      setIsStandalone(standalone);
+
+      try {
+        const dismissed = localStorage.getItem("sleepscape-ios-banner-dismissed") === "true";
+        setDismissIosBanner(dismissed);
+      } catch {}
+    }
+
+    // Orologio per modalità comodino
+    const updateTime = () => {
+      const now = new Date();
+      setCurrentTimeStr(now.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }));
+    };
+    updateTime();
+    const clockId = window.setInterval(updateTime, 1000);
+
     // Carica eventuali preset salvati
     try {
       const stored = JSON.parse(localStorage.getItem("sleepscape-presets") || "[]");
@@ -123,7 +188,9 @@ export default function Home() {
     }
 
     return () => {
+      window.clearInterval(clockId);
       if (fadeTimeout.current !== null) window.clearTimeout(fadeTimeout.current);
+      void releaseWakeLock();
       engineRef.current?.stop();
       engineRef.current = null;
     };
@@ -152,23 +219,77 @@ export default function Home() {
     return () => window.clearInterval(id);
   }, [timerEnd]);
 
-  // Sveglia progressiva
+  // Gestione sveglia affidabile per iPhone (Wake Lock, Background Keep-Alive e verifica timestamp)
   useEffect(() => {
-    if (!alarmEnabled) return;
+    if (!alarmEnabled) {
+      if (!nightMode) void releaseWakeLock();
+      setAlarmStatus("Sveglia disattivata");
+      return;
+    }
+
+    // Richiedi Wake Lock e audio carrier per iPhone
+    void requestWakeLock();
+    engineRef.current?.enableKeepAliveCarrier();
+
+    // Notifica MediaSession su iOS
+    if ("mediaSession" in navigator) {
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: "SleepScape - Sveglia Attiva",
+          artist: `Sveglia impostata alle ${alarmTime}`,
+          album: "SleepScape",
+          artwork: [
+            { src: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" },
+            { src: "/icon-192x192.png", sizes: "192x192", type: "image/png" },
+          ],
+        });
+        navigator.mediaSession.playbackState = "playing";
+      } catch {}
+    }
+
     const target = new Date();
     const [hours, minutes] = alarmTime.split(":").map(Number);
     target.setHours(hours, minutes, 0, 0);
     if (target.getTime() <= Date.now()) target.setDate(target.getDate() + 1);
     setAlarmStatus(`Sveglia attiva alle ${alarmTime}`);
-    const id = window.setInterval(() => {
+
+    const checkAlarm = () => {
       if (Date.now() >= target.getTime()) {
-        window.clearInterval(id);
         setAlarmEnabled(false);
         void wakeUp();
       }
+    };
+
+    const id = window.setInterval(checkAlarm, 1000);
+
+    // Se l'utente riattiva l'iPhone o torna sulla tab, riverifica subito
+    const handleVis = () => {
+      if (document.visibilityState === "visible") {
+        void requestWakeLock();
+        checkAlarm();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVis);
+
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", handleVis);
+    };
+  }, [alarmEnabled, alarmTime, nightMode]);
+
+  // Gestione countdown per il test rapido della sveglia (5 secondi)
+  useEffect(() => {
+    if (testAlarmCountdown === null) return;
+    if (testAlarmCountdown === 0) {
+      setTestAlarmCountdown(null);
+      void wakeUp();
+      return;
+    }
+    const t = window.setTimeout(() => {
+      setTestAlarmCountdown((prev) => (prev !== null ? prev - 1 : null));
     }, 1000);
-    return () => window.clearInterval(id);
-  }, [alarmEnabled, alarmTime]);
+    return () => window.clearTimeout(t);
+  }, [testAlarmCountdown]);
 
   const activeCount = useMemo(() => Object.values(mix).filter((v) => v > 0).length, [mix]);
 
@@ -380,12 +501,12 @@ export default function Home() {
   async function wakeUp() {
     cancelSleepTimer();
     try {
-      // Transizione graduale verso la mattina: uccellini, ruscello e onde soffuse
+      // Transizione graduale verso la mattina: bosco con uccellini FM, ruscello alpino cristallino e onde
       const morningMix: Mix = {
         ...EMPTY_MIX,
-        forest: 48,
-        stream: 40,
-        waves: mixRef.current.waves > 0 ? 22 : 0,
+        forest: 62,
+        stream: 46,
+        waves: mixRef.current.waves > 0 ? 25 : 0,
         wind: 10,
       };
 
@@ -398,14 +519,14 @@ export default function Home() {
       } else {
         engine.setMix(morningMix);
       }
-      engine.fadeMasterTo(0.7, 18);
-      engine.playWakeChime(55);
+      engine.fadeMasterTo(0.85, 14);
+      engine.playWakeChime(45);
       setMix(morningMix);
       setActiveScenario("");
       setAlarmStatus("Buongiorno! Risveglio dolce in corso ☀️");
-      showToast("Risveglio dolce attivato ☀️");
+      showToast("Buongiorno! Risveglio dolce attivato ☀️");
     } catch {
-      setError("Impossibile avviare la sveglia. Premi Avvia ambiente per abilitare l’audio.");
+      setError("Impossibile avviare la sveglia. Tocca lo schermo per abilitare l'audio.");
     }
   }
 
@@ -414,7 +535,12 @@ export default function Home() {
       {/* HEADER HERO */}
       <header className="hero">
         <div>
-          <span className="eyebrow">SLEEPSCAPE · AMBIENT GENERATOR</span>
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
+            <span className="eyebrow">SLEEPSCAPE · AMBIENT GENERATOR</span>
+            {isStandalone && (
+              <span className="standaloneBadge">📱 PWA iPhone Standalone</span>
+            )}
+          </div>
           <h1>Crea il posto in cui vuoi dormire.</h1>
           <p>
             Mescola atmosfere sonore reali (dal camino innevato al caldobagno o treno notturno), programma lo spegnimento
@@ -431,6 +557,108 @@ export default function Home() {
           {playing ? "Ferma ambiente" : "Avvia ambiente"}
         </button>
       </header>
+
+      {/* BANNER GUIDA PWA PER IPHONE / SAFARI */}
+      {isIOS && !isStandalone && !dismissIosBanner && (
+        <div className="iosInstallBanner" role="region" aria-label="Installa SleepScape su iPhone">
+          <div className="iosInstallContent">
+            <span className="iosIcon">📲</span>
+            <div>
+              <b>Installa SleepScape su iPhone come PWA</b>
+              <p>
+                Per usare l'app a schermo intero e far suonare la sveglia anche di notte: tocca <b>Condividi (⎋)</b> in Safari e seleziona <b>"Aggiungi alla schermata Home" (➕)</b>.
+              </p>
+            </div>
+          </div>
+          <div className="iosInstallActions">
+            <button className="primary mini" onClick={() => setShowIosModal(true)}>
+              Come fare
+            </button>
+            <button
+              className="ghost mini"
+              onClick={() => {
+                setDismissIosBanner(true);
+                try {
+                  localStorage.setItem("sleepscape-ios-banner-dismissed", "true");
+                } catch {}
+              }}
+              title="Nascondi avviso"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL GUIDA DETTAGLIATA INSTALLAZIONE IPHONE */}
+      {showIosModal && (
+        <div className="iosModalBackdrop" onClick={() => setShowIosModal(false)}>
+          <div className="iosModalCard" onClick={(e) => e.stopPropagation()}>
+            <h3>📱 Come installare su iPhone</h3>
+            <p style={{ fontSize: "0.9rem", color: "var(--muted)", margin: "0 0 16px" }}>
+              Su iPhone, Apple richiede di aggiungere l'app alla Schermata Home direttamente da Safari:
+            </p>
+            <div className="iosModalSteps">
+              <div className="iosModalStep">
+                <span className="stepNum">1</span>
+                <span>Apri questa pagina in <b>Safari</b> sul tuo iPhone.</span>
+              </div>
+              <div className="iosModalStep">
+                <span className="stepNum">2</span>
+                <span>Tocca l'icona <b>Condividi</b> (il quadratino con la freccia verso l'alto ⎋) nella barra in basso.</span>
+              </div>
+              <div className="iosModalStep">
+                <span className="stepNum">3</span>
+                <span>Scorri verso il basso e tocca <b>"Aggiungi alla schermata Home" ➕</b>.</span>
+              </div>
+              <div className="iosModalStep">
+                <span className="stepNum">4</span>
+                <span>Tocca <b>Aggiungi</b> in alto a destra: troverai l'icona di SleepScape tra le tue app preferite!</span>
+              </div>
+            </div>
+            <button
+              className="primary"
+              style={{ width: "100%", marginTop: "12px" }}
+              onClick={() => setShowIosModal(false)}
+            >
+              Ho capito
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* MODALITÀ COMODINO (SCHERMO NOTTE OLED PURE BLACK) */}
+      {nightMode && (
+        <div className="nightModeOverlay" onClick={() => setNightMode(false)}>
+          <div className="nightModeTop">
+            <h3>🌙 Modalità Comodino</h3>
+            <p>Schermo OLED a risparmio energetico</p>
+          </div>
+
+          <div className="nightModeCenter">
+            <div className="nightModeClock">{currentTimeStr}</div>
+            <div className="nightModeAlarmBadge">
+              <div className="nightPulse" />
+              <span>{alarmEnabled ? `Sveglia impostata alle ${alarmTime}` : "Sveglia non attiva"}</span>
+            </div>
+            <small style={{ color: "rgba(255,255,255,0.4)", marginTop: "6px" }}>
+              Schermo tenuto attivo con Wake Lock per garantire la sveglia
+            </small>
+          </div>
+
+          <div className="nightModeBottom">
+            <button
+              className="nightModeExitBtn"
+              onClick={(e) => {
+                e.stopPropagation();
+                setNightMode(false);
+              }}
+            >
+              Esci dalla modalità notte ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* QUICK JUMP NAVIGATION BAR */}
       <nav className="navBar" aria-label="Navigazione rapida sezioni">
@@ -658,6 +886,49 @@ export default function Home() {
               </button>
             </div>
             <p style={{ fontSize: "0.85rem", color: "var(--accent2)", marginTop: "10px" }}>{alarmStatus}</p>
+
+            {/* Pulsanti avanzati per iPhone e comodino */}
+            <div className="alarmControlsRow">
+              <button
+                type="button"
+                className="btnNightMode"
+                onClick={() => {
+                  setNightMode(true);
+                  void requestWakeLock();
+                  if (!alarmEnabled) {
+                    setAlarmEnabled(true);
+                    showToast("Sveglia e Modalità Comodino attivate 🌙");
+                  }
+                }}
+                title="Attiva lo schermo nero OLED con orologio per il comodino"
+              >
+                <span>🌙</span> Modalità Comodino
+              </button>
+
+              <button
+                type="button"
+                className="btnTestAlarm"
+                onClick={() => {
+                  cancelSleepTimer();
+                  showToast("Test sveglia: suona tra 5 secondi! ☀️");
+                  setTestAlarmCountdown(5);
+                }}
+                disabled={testAlarmCountdown !== null}
+                title="Ascolta un'anteprima di 5 secondi del risveglio dolce"
+              >
+                {testAlarmCountdown !== null ? `⚡ Suona tra ${testAlarmCountdown}s...` : "⚡ Prova sveglia (5s)"}
+              </button>
+
+              {wakeLockActive && (
+                <span className="standaloneBadge" style={{ margin: 0 }}>
+                  🔋 Schermo attivo (Wake Lock)
+                </span>
+              )}
+            </div>
+
+            <p style={{ fontSize: "0.78rem", color: "var(--muted)", marginTop: "14px", lineHeight: 1.45 }}>
+              💡 <b>Consiglio per iPhone:</b> attiva la <b>Modalità Comodino</b> per tenere l'orologio visibile su sfondo nero OLED con zero consumo e garantire che iOS esegua la sveglia senza sospendere i timer.
+            </p>
           </div>
         </div>
       </section>
